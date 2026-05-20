@@ -99,7 +99,8 @@ class HMM:
                 e[t] /= np.sum(e[t])
             gamma /= np.sum(gamma, axis=0, keepdims=True)
             self.stateGen.q = gamma[:, 0]
-            den = np.sum(gamma[:,:-1], axis=1)
+            #Prevent division by zero
+            den = np.maximum(np.sum(gamma[:,:-1], axis=1), 1e-10)
             num = np.sum(e, axis=0)
             A_new = np.zeros_like(self.stateGen.A)
             for i in range(self.nStates):
@@ -108,7 +109,7 @@ class HMM:
             self.stateGen.A = A_new
 
             for s in range(self.nStates):
-                weights = gamma[s] / np.sum(gamma[s])
+                weights = gamma[s] / np.maximum(np.sum(gamma[s]), 1e-10)
                 self.outputDistr[s].means = np.sum(X * weights, axis=1)
                 diff = X - self.outputDistr[s].means[:, np.newaxis]
                 self.outputDistr[s].cov = (diff * weights) @ diff.T + eta
