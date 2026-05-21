@@ -1,4 +1,5 @@
 import numpy as np
+import scipy
 from .DiscreteD import DiscreteD
 from .GaussD import GaussD
 from .HMM import HMM
@@ -103,6 +104,7 @@ class MarkovChain:
         return np.array(S)
 
     def viterbi(self):
+
         pass
     
     def stationaryProb(self):
@@ -126,36 +128,27 @@ class MarkovChain:
     def initErgodic(self):
         pass
 
-    def forward(self, pX):
-        a_temp = np.zeros((self.nStates, pX.shape[1]))
-        c = np.zeros(pX.shape[1]+1)
-        a_hat = np.zeros((self.nStates, pX.shape[1]))
-
-        a_temp[:, 0] = self.q * pX[:, 0]
-        c[0] = np.sum(a_temp[:, 0])
-        a_hat[:, 0] = a_temp[:, 0] / c[0]
-        for t in range(1, pX.shape[1]):
-            a_temp[:, t] = (a_hat[:, t-1] @ self.A[:, :self.nStates]) * pX[:, t]
-            c[t] = np.sum(a_temp[:, t])
-            a_hat[:, t] = a_temp[:, t] / c[t]
-        c[-1] = np.sum(a_hat[:, -1] @ self.A[:, self.nStates]) if self.is_finite else 0
-        return a_hat, c
+    def forward(self, log_pX):
+        log_alpha = np.zeros((self.nStates, log_pX.shape[1]))
+        log_A = np.log(np.maximum(self.A, 1e-300))
+        log_q = np.log(np.maximum(self.q, 1e-300))
+        log_alpha[:, 0] = log_q + log_pX[:, 0]
+        for t in range(1, log_pX.shape[1]):
+            for s in range(self.nStates):
+                log_alpha[s, t] = scipy.special.logsumexp(log_alpha[:, t-1] + log_A[:, s]) + log_pX[s, t]
+        return log_alpha
 
     def finiteDuration(self):
         pass
     
-    def backward(self, c, pX):
-        b = np.zeros((self.nStates, pX.shape[1]))
-        b_hat = np.zeros((self.nStates, pX.shape[1]))
-        if self.is_finite:
-            b[:, -1] = self.A[:, self.nStates]
-            b_hat[:, -1] = b[:, -1] / (c[-1] * c[-2])
-        else:
-            b[:, -1] = 1
-            b_hat[:, -1] = b[:, -1] / c[-2]
-        for t in range(pX.shape[1]-1, 0, -1):
-            b_hat[:, t-1] = (self.A[:, :self.nStates] @ (pX[:, t] * b_hat[:, t])) / c[t-1]
-        return b_hat
+    def backward(self, log_pX):
+        log_beta = np.zeros((self.nStates, log_pX.shape[1]))
+        log_A = np.log(self.A + 1e-300)
+        log_beta[:, -1] = 0
+        for t in range(log_pX.shape[1]-2, -1, -1):
+            for s in range(self.nStates):
+                log_beta[s, t] = scipy.special.logsumexp(log_A[s, :] + log_pX[:, t+1] + log_beta[:, t+1])
+        return log_beta
 
     def adaptStart(self):
         pass

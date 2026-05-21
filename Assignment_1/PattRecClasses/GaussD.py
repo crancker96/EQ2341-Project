@@ -56,8 +56,8 @@ class GaussD:
     def init(self):
         pass
     
-    def logprob(self):
-        pass
+    def logprob(self, values):
+        return scipy.stats.multivariate_normal(mean=self.means, cov=self.cov).logpdf(values)
 
     def prob(self, values):
         return scipy.stats.multivariate_normal(mean=self.means, cov=self.cov).pdf(values)

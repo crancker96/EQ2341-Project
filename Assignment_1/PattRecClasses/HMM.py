@@ -1,4 +1,5 @@
 import numpy as np
+import scipy
 
 from .DiscreteD import DiscreteD
 from .GaussD import GaussD
@@ -81,52 +82,58 @@ class HMM:
 
         
     def viterbi(self, X):
-        pX, _ = self.calcPx(X)
-        chi = np.zeros((self.nStates, pX.shape[1]))
-        zeta = np.zeros((self.nStates, pX.shape[1]), dtype=int)
-        chi[:, 0] = self.stateGen.q * pX[:, 0]
-        for t in range(1, pX.shape[1]):
+        log_pX = self.calcPx(X)
+        chi = np.zeros((self.nStates, log_pX.shape[1]))
+        zeta = np.zeros((self.nStates, log_pX.shape[1]), dtype=int)
+        chi[:, 0] = self.stateGen.q * log_pX[:, 0]
+        for t in range(1, log_pX.shape[1]):
             for s in range(self.nStates):
-                chi[s, t] = np.max(chi[:, t-1] * self.stateGen.A[:, s]) * pX[s, t]
+                chi[s, t] = np.max(chi[:, t-1] * self.stateGen.A[:, s]) * log_pX[s, t]
                 zeta[s, t] = np.argmax(chi[:, t-1] * self.stateGen.A[:, s])
-        S = np.zeros(pX.shape[1], dtype=int)
+        S = np.zeros(log_pX.shape[1], dtype=int)
         S[-1] = np.argmax(chi[:, -1])
-        for t in range(pX.shape[1]-2, -1, -1):
+        for t in range(log_pX.shape[1]-2, -1, -1):
             S[t] = zeta[S[t+1], t+1]
         return S
 
 
     def train(self, X):
         T = X.shape[1]
-        eta = np.eye(self.nStates)*1e-10
+        D = X.shape[0]
+        eta = np.eye(D)*1e-3
         log_diff = np.inf
         prev_log_prob = -np.inf
         while log_diff > 1e-6:
-            log_prob, a_hat, b_hat, c, pX = self.logprob(X)
-            gamma = a_hat * b_hat
-            e = np.zeros((T-1, self.nStates, self.nStates))
+            log_prob, log_alpha, log_beta, log_pX = self.logprob(X)
+            log_gamma = log_alpha + log_beta
+            log_gamma -= scipy.special.logsumexp(log_gamma, axis=0, keepdims=True)
+            gamma = np.exp(log_gamma)
+            log_xi = np.zeros((T-1, self.nStates, self.nStates))
             for t in range(T-1):
-                for i in range(self.nStates):
-                    for j in range(self.nStates):
-                        e[t, i, j] = a_hat[i, t] * self.stateGen.A[i, j] * pX[j, t+1] * b_hat[j, t+1] / c[t+1]
-                e[t] /= np.sum(e[t])
-            gamma /= np.sum(gamma, axis=0, keepdims=True)
-            self.stateGen.q = gamma[:, 0]
+                log_xi[t] = log_alpha[:, t][:,None] + np.log(self.stateGen.A + 1e-300) + log_pX[:, t+1] + log_beta[:, t+1]
+            xi = np.exp(log_xi - scipy.special.logsumexp(log_xi, axis=(1,2), keepdims=True))
+            self.stateGen.q = gamma[:, 0] / np.sum(gamma[:, 0])
             #Prevent division by zero
             den = np.maximum(np.sum(gamma[:,:-1], axis=1), 1e-10)
-            num = np.sum(e, axis=0)
+            num = np.sum(xi, axis=0)
             A_new = np.zeros_like(self.stateGen.A)
             for i in range(self.nStates):
                 for j in range(self.nStates):
                     A_new[i, j] = num[i, j] / den[i]
+            A_new /= np.sum(A_new, axis=1, keepdims=True)
             self.stateGen.A = A_new
 
             for s in range(self.nStates):
-                weights = gamma[s] / np.maximum(np.sum(gamma[s]), 1e-10)
-                self.outputDistr[s].means = np.sum(X * weights, axis=1)
-                diff = X - self.outputDistr[s].means[:, np.newaxis]
-                self.outputDistr[s].cov = (diff * weights) @ diff.T + eta
-            log_diff = log_prob - prev_log_prob
+                weights = gamma[s,:]
+                weights /= np.sum(weights)
+                mu = np.sum(X * weights, axis=1, keepdims=True)
+                self.outputDistr[s].means = mu.flatten()
+                diff = X - mu
+                cov = diff @ (diff * weights).T + eta
+                self.outputDistr[s].cov = cov
+            log_diff = np.abs(log_prob - prev_log_prob)
+            if not np.isfinite(log_prob):
+                raise ValueError("Log probability became non-finite")
             prev_log_prob = log_prob
             print(f"Log-likelihood: {log_prob}, Log-likelihood difference: {log_diff}")
         return log_prob
@@ -143,31 +150,20 @@ class HMM:
         pass
 
     def logprob(self, X):
-        pX, log_scale = self.calcPx(X)
-        a_hat, c = self.stateGen.forward(pX)
-        
-        b_hat = self.stateGen.backward(c, pX)
-        if self.stateGen.is_finite:
-            log_prob = np.sum(np.log(c)) + log_scale
-        else:
-            log_prob = np.sum(np.log(c[:-1])) + log_scale
-        return log_prob, a_hat, b_hat, c, pX
+        eps = 1e-300
+        log_pX= self.calcPx(X)
+        log_alpha = self.stateGen.forward(log_pX)        
+        log_beta = self.stateGen.backward(log_pX)
+        log_prob = scipy.special.logsumexp(log_alpha[:, -1])
+        return log_prob, log_alpha, log_beta, log_pX
 
     def calcPx(self, X):
-        pX = np.zeros((self.nStates, X.shape[1]))
-        log_scale = 0.0
+        log_pX = np.zeros((self.nStates, X.shape[1]))
+        
         for t in range(X.shape[1]):
-            probs = []
             for s in range(self.nStates):
-                probs.append(self.outputDistr[s].prob(X[:, t]))
-            probs = np.array(probs)
-            scale = np.max(probs)
-            if scale > 0:
-                probs = probs / scale
-                log_scale += np.log(scale)
-            
-            pX[:, t] = probs
-        return pX, log_scale
+                log_pX[s,t] = self.outputDistr[s].logprob(X[:, t])
+        return log_pX
 
     def adaptStart(self):
         pass
