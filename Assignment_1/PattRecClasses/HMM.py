@@ -80,8 +80,21 @@ class HMM:
         return X, S
 
         
-    def viterbi(self):
-        pass
+    def viterbi(self, X):
+        pX, _ = self.calcPx(X)
+        chi = np.zeros((self.nStates, pX.shape[1]))
+        zeta = np.zeros((self.nStates, pX.shape[1]), dtype=int)
+        chi[:, 0] = self.stateGen.q * pX[:, 0]
+        for t in range(1, pX.shape[1]):
+            for s in range(self.nStates):
+                chi[s, t] = np.max(chi[:, t-1] * self.stateGen.A[:, s]) * pX[s, t]
+                zeta[s, t] = np.argmax(chi[:, t-1] * self.stateGen.A[:, s])
+        S = np.zeros(pX.shape[1], dtype=int)
+        S[-1] = np.argmax(chi[:, -1])
+        for t in range(pX.shape[1]-2, -1, -1):
+            S[t] = zeta[S[t+1], t+1]
+        return S
+
 
     def train(self, X):
         T = X.shape[1]
