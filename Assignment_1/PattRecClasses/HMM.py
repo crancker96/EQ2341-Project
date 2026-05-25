@@ -97,39 +97,65 @@ class HMM:
 
 
     def train(self, X):
-        T = X.shape[1]
-        eta = np.eye(self.nStates)*1e-10
+        alpha = 0.1
+        eta = np.eye(self.nStates)*1e-3
         log_diff = np.inf
         prev_log_prob = -np.inf
         while log_diff > 1e-6:
-            log_prob, a_hat, b_hat, c, pX = self.logprob(X)
-            gamma = a_hat * b_hat
-            e = np.zeros((T-1, self.nStates, self.nStates))
-            for t in range(T-1):
-                for i in range(self.nStates):
-                    for j in range(self.nStates):
-                        e[t, i, j] = a_hat[i, t] * self.stateGen.A[i, j] * pX[j, t+1] * b_hat[j, t+1] / c[t+1]
-                e[t] /= np.sum(e[t])
-            gamma /= np.sum(gamma, axis=0, keepdims=True)
-            self.stateGen.q = gamma[:, 0]
-            #Prevent division by zero
-            den = np.maximum(np.sum(gamma[:,:-1], axis=1), 1e-10)
-            num = np.sum(e, axis=0)
+            num_total = np.zeros((self.nStates, self.nStates))
+            den_total = np.zeros(self.nStates)
+            means_total = np.zeros((self.nStates, self.dataSize))
+            cov_total = np.zeros((self.nStates, self.dataSize, self.dataSize))
+            q_total = np.zeros(self.nStates)
+            gamma_sum = np.zeros(self.nStates)
+            gammas = []
+            log_prob_total = 0.0
+
+            for seq in X:
+                T = seq.shape[1]
+                log_prob, a_hat, b_hat, c, pX = self.logprob(seq)
+                gamma = a_hat * b_hat
+                e = np.zeros((T-1, self.nStates, self.nStates))
+                for t in range(T-1):
+                    for i in range(self.nStates):
+                        for j in range(self.nStates):
+                            e[t, i, j] = a_hat[i, t] * self.stateGen.A[i, j] * pX[j, t+1] * b_hat[j, t+1] / c[t+1]
+                    e[t] /= np.maximum(np.sum(e[t]), 1e-300)
+                gamma /= np.sum(gamma, axis=0, keepdims=True)
+                gammas.append(gamma)
+                q_total += gamma[:, 0]
+                #Prevent division by zero
+                den_total += np.maximum(np.sum(gamma[:,:-1], axis=1), 1e-10)
+                num_total += np.sum(e, axis=0)
+                for s in range(self.nStates):
+                    gamma_sum[s] += np.sum(gamma[s])
+                    #weights = gamma[s] / np.maximum(np.sum(gamma[s]), 1e-10)
+                    means_total[s] += np.sum(seq * gamma[s], axis=1)
+                log_prob_total += log_prob
+
             A_new = np.zeros_like(self.stateGen.A)
             for i in range(self.nStates):
                 for j in range(self.nStates):
-                    A_new[i, j] = num[i, j] / den[i]
+                    A_new[i, j] = num_total[i, j] / den_total[i]
+            
+            #A_new = num_total + alpha
+            A_new /= np.sum(A_new, axis=1, keepdims=True)
             self.stateGen.A = A_new
+            self.stateGen.q = q_total / len(X)
 
             for s in range(self.nStates):
-                weights = gamma[s] / np.maximum(np.sum(gamma[s]), 1e-10)
-                self.outputDistr[s].means = np.sum(X * weights, axis=1)
-                diff = X - self.outputDistr[s].means[:, np.newaxis]
-                self.outputDistr[s].cov = (diff * weights) @ diff.T + eta
-            log_diff = log_prob - prev_log_prob
-            prev_log_prob = log_prob
-            print(f"Log-likelihood: {log_prob}, Log-likelihood difference: {log_diff}")
-        return log_prob
+                self.outputDistr[s].means = means_total[s] / np.maximum(gamma_sum[s], 1e-300)
+        
+            for i, seq in enumerate(X):
+                for s in range(self.nStates):
+                    diff = seq - self.outputDistr[s].means[:, np.newaxis]
+                    cov_total[s] += (diff * gammas[i][s]) @ diff.T
+            for s in range(self.nStates):
+                self.outputDistr[s].cov = cov_total[s] / np.maximum(gamma_sum[s], 1e-300) + eta
+            log_diff = np.abs(log_prob_total - prev_log_prob)
+            prev_log_prob = log_prob_total
+            print(f"Log-likelihood: {log_prob_total}, Log-likelihood difference: {log_diff}")
+        return log_prob_total
 
             
 
