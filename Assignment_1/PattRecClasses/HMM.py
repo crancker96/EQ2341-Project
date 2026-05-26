@@ -97,7 +97,6 @@ class HMM:
 
 
     def train(self, X):
-        alpha = 0.1
         eta = np.eye(self.nStates)*1e-3
         log_diff = np.inf
         prev_log_prob = -np.inf
@@ -129,7 +128,6 @@ class HMM:
                 num_total += np.sum(e, axis=0)
                 for s in range(self.nStates):
                     gamma_sum[s] += np.sum(gamma[s])
-                    #weights = gamma[s] / np.maximum(np.sum(gamma[s]), 1e-10)
                     means_total[s] += np.sum(seq * gamma[s], axis=1)
                 log_prob_total += log_prob
 
@@ -138,7 +136,6 @@ class HMM:
                 for j in range(self.nStates):
                     A_new[i, j] = num_total[i, j] / den_total[i]
             
-            #A_new = num_total + alpha
             A_new /= np.sum(A_new, axis=1, keepdims=True)
             self.stateGen.A = A_new
             self.stateGen.q = q_total / len(X)
