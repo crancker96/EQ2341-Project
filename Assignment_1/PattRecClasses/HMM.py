@@ -100,6 +100,7 @@ class HMM:
         eta = np.eye(self.nStates)*1e-3
         log_diff = np.inf
         prev_log_prob = -np.inf
+        #Perform EM iterations until convergence
         while log_diff > 1e-6:
             num_total = np.zeros((self.nStates, self.nStates))
             den_total = np.zeros(self.nStates)
@@ -121,9 +122,10 @@ class HMM:
                             e[t, i, j] = a_hat[i, t] * self.stateGen.A[i, j] * pX[j, t+1] * b_hat[j, t+1] / c[t+1]
                     e[t] /= np.maximum(np.sum(e[t]), 1e-300)
                 gamma /= np.sum(gamma, axis=0, keepdims=True)
+                #Store gammas for later use in covariance update
                 gammas.append(gamma)
+                #Update totals for M-step
                 q_total += gamma[:, 0]
-                #Prevent division by zero
                 den_total += np.maximum(np.sum(gamma[:,:-1], axis=1), 1e-10)
                 num_total += np.sum(e, axis=0)
                 for s in range(self.nStates):
@@ -131,6 +133,7 @@ class HMM:
                     means_total[s] += np.sum(seq * gamma[s], axis=1)
                 log_prob_total += log_prob
 
+            #Update A and q
             A_new = np.zeros_like(self.stateGen.A)
             for i in range(self.nStates):
                 for j in range(self.nStates):
@@ -140,11 +143,13 @@ class HMM:
             self.stateGen.A = A_new
             self.stateGen.q = q_total / len(X)
 
+            #Update output distributions
             for s in range(self.nStates):
                 self.outputDistr[s].means = means_total[s] / np.maximum(gamma_sum[s], 1e-300)
         
             for i, seq in enumerate(X):
                 for s in range(self.nStates):
+                    #Covariance must use new means, so we calculate it after updating means
                     diff = seq - self.outputDistr[s].means[:, np.newaxis]
                     cov_total[s] += (diff * gammas[i][s]) @ diff.T
             for s in range(self.nStates):
